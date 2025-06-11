@@ -1,0 +1,109 @@
+name: Sync sources & index (changed repos only)
+
+on:
+  schedule:
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+
+env:
+  DATA_REPOS: |
+    migiwa-ya/dataset-shrines
+    migiwa-ya/dataset-deities
+    migiwa-ya/dataset-cities
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      repo_matrix: ${{ steps.make.outputs.matrix }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: sha-cache, path: .sha }
+        continue-on-error: true
+
+      - id: make
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .sha
+          declare -a entries
+          while IFS= read -r repo; do
+            [[ -z "$repo" ]] && continue
+            head=$(gh api "/repos/$repo/commits?per_page=1" --jq '.[0].sha')
+            cache=".sha/$(echo $repo | tr / _)"
+            prev=$(cat "$cache" 2>/dev/null || echo "")
+            echo "$head" > "$cache"
+
+            if [[ "$head" != "$prev" ]]; then
+              entries+=("{\"repo\":\"$repo\",\"prev\":\"$prev\",\"head\":\"$head\"}")
+            fi
+          done <<< "$DATA_REPOS"
+
+          if (( ${#entries[@]} )); then
+            echo "matrix={\"include\":[${entries[*]}]}" >> $GITHUB_OUTPUT
+          fi
+      - uses: actions/upload-artifact@v4
+        with: { name: sha-cache, path: .sha, retention-days: 14 }
+
+  upload_source:
+    needs: detect
+    if: needs.detect.outputs.repo_matrix != ''
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.repo_matrix) }}
+    runs-on: ubuntu-latest
+    env:
+      GIT_HEAD_REF: ${{ matrix.head }}
+      GIT_BASE_REF: ${{ matrix.prev }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPO: ${{ matrix.repo }}
+      R2_ACCESS: ${{ secrets.R2_ACCESS_KEY }}
+      R2_SECRET: ${{ secrets.R2_SECRET_KEY }}
+      R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_CDN_ORIGIN: ${{ vars.CLOUDFLARE_CDN_ORIGIN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: repo
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - name: Upload source to R2
+        run: >
+          npx ts-node scripts/upload-source.ts
+
+  upload_index:
+    needs:
+      - detect
+      - upload_source
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.repo_matrix) }}
+    runs-on: ubuntu-latest
+    env:
+      GIT_HEAD_REF: ${{ matrix.head }}
+      GIT_BASE_REF: ${{ matrix.prev }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPO: ${{ matrix.repo }}
+      R2_ACCESS: ${{ secrets.R2_ACCESS_KEY }}
+      R2_SECRET: ${{ secrets.R2_SECRET_KEY }}
+      R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_CDN_ORIGIN: ${{ vars.CLOUDFLARE_CDN_ORIGIN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: repo
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - name: Upload index to R2
+        run: >
+          npx ts-node scripts/upload-index.ts
