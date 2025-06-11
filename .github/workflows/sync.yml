@@ -43,7 +43,10 @@ jobs:
             echo "matrix={\"include\":[${entries[*]}]}" >> $GITHUB_OUTPUT
           fi
       - uses: actions/upload-artifact@v4
-        with: { name: sha-cache, path: .sha, retention-days: 14 }
+        with:
+          name: sha-cache
+          path: .sha/**
+          retention-days: 14
 
   upload_source:
     needs: detect
