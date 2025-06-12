@@ -17,36 +17,58 @@ jobs:
     outputs:
       repo_matrix: ${{ steps.make.outputs.matrix }}
     steps:
-      - uses: actions/download-artifact@v4
-        with: { name: sha-cache, path: .sha }
-        continue-on-error: true
+      - name: Restore SHA cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .sha
+          key: sha-cache-${{ github.run_id }}
+          restore-keys: |
+            sha-cache-
 
       - id: make
-        env:
-          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        env: { GH_HEADER: "Authorization: Bearer ${{ github.token }}" }
         run: |
+          set -euo pipefail
           mkdir -p .sha
-          declare -a entries
+          changed=()
           while IFS= read -r repo; do
             [[ -z "$repo" ]] && continue
-            head=$(gh api "/repos/$repo/commits?per_page=1" --jq '.[0].sha')
-            cache=".sha/$(echo $repo | tr / _)"
-            prev=$(cat "$cache" 2>/dev/null || echo "")
-            echo "$head" > "$cache"
+            latest=$(curl -s -H "$GH_HEADER" \
+                     "https://api.github.com/repos/${repo}/commits?per_page=1" \
+                     | jq -r '.[0].sha // empty')
+            [[ -z "$latest" ]] && { echo "::warning::HEAD SHA empty for $repo"; continue; }
 
-            if [[ "$head" != "$prev" ]]; then
-              entries+=("{\"repo\":\"$repo\",\"prev\":\"$prev\",\"head\":\"$head\"}")
-            fi
+            cache=".sha/$(echo $repo | tr / _).sha"
+            prev=$(cat "$cache" 2>/dev/null || echo "")
+            echo "$latest" > "$cache"
+
+            echo "repo=$repo  prev=${prev:0:7}  head=${latest:0:7}"
+
+            [[ "$latest" != "$prev" ]] && \
+              changed+=("{\"repo\":\"$repo\",\"prev\":\"$prev\",\"head\":\"$latest\"}")
           done <<< "$DATA_REPOS"
 
-          if (( ${#entries[@]} )); then
-            echo "matrix={\"include\":[${entries[*]}]}" >> $GITHUB_OUTPUT
+          if (( ${#changed[@]} )); then
+            printf -v joined '%s,' "${changed[@]}"
+            matrix_json='{"include":['"${joined%,}"']}'
+            echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+            echo "::notice::matrix_json=$matrix_json"
           fi
-      - uses: actions/upload-artifact@v4
+
+          echo "::group::.sha contents"; ls -l .sha; echo "::endgroup::"
+
+      - name: Save SHA cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          name: sha-cache
-          path: .sha/**
-          retention-days: 14
+          path: .sha
+          key: sha-cache-${{ github.run_id }}
+
+      - name: Dump outputs
+        run: |
+          echo "repo_matrix='${{ steps.make.outputs.matrix }}'"
 
   upload_source:
     needs: detect
@@ -59,8 +81,8 @@ jobs:
       GIT_BASE_REF: ${{ matrix.prev }}
       GITHUB_TOKEN: ${{ github.token }}
       GITHUB_REPO: ${{ matrix.repo }}
-      R2_ACCESS: ${{ secrets.R2_ACCESS_KEY }}
-      R2_SECRET: ${{ secrets.R2_SECRET_KEY }}
+      R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+      R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
       R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
       CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
@@ -68,16 +90,18 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: ${{ github.workspace }}
+      - uses: actions/checkout@v4
         with:
           repository: ${{ matrix.repo }}
           path: repo
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm ci
       - name: Upload source to R2
         run: >
-          npx ts-node scripts/upload-source.ts
+          npx tsx scripts/upload-source.ts
 
   upload_index:
     needs:
@@ -91,8 +115,8 @@ jobs:
       GIT_BASE_REF: ${{ matrix.prev }}
       GITHUB_TOKEN: ${{ github.token }}
       GITHUB_REPO: ${{ matrix.repo }}
-      R2_ACCESS: ${{ secrets.R2_ACCESS_KEY }}
-      R2_SECRET: ${{ secrets.R2_SECRET_KEY }}
+      R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+      R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
       R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
       CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
@@ -100,13 +124,15 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+        working-directory: ${{ github.workspace }}
+      - uses: actions/checkout@v4
         with:
           repository: ${{ matrix.repo }}
           path: repo
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: npm ci
       - name: Upload index to R2
         run: >
-          npx ts-node scripts/upload-index.ts
+          npx tsx scripts/upload-index.ts
