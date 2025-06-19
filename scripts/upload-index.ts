@@ -54,27 +54,23 @@ if (
     token: GITHUB_TOKEN,
   });
 
+  const repoName = GITHUB_REPO.split("/")[1];
+  const sourceKey = repoName.replace(/^dataset-/, "");
+  const overridePattern = sourceKey === "cities" ? "sources/*.json" : "sources/*.md";
+  const diffConfig = {
+    ...config,
+    sources: {
+      [sourceKey]: {
+        ...config.sources[sourceKey],
+        pattern: overridePattern,
+      },
+    },
+  } as StaticQLConfig;
   const diffEntries = await extractDiff({
     baseRef: GIT_BASE_REF,
     headRef: GIT_HEAD_REF,
     baseDir: "",
-    config: {
-      ...config,
-      sources: {
-        shrines: {
-          ...config.sources.shrines,
-          pattern: "sources/*.md",
-        },
-        deities: {
-          ...config.sources.deities,
-          pattern: "sources/*.md",
-        },
-        cities: {
-          ...config.sources.cities,
-          pattern: "sources/*.json",
-        },
-      },
-    },
+    config: diffConfig,
     diffProvider: githubProvider,
   });
 
