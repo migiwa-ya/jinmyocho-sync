@@ -4,6 +4,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { GitHubDiffProvider } from "staticql/diff/github";
+import { basename, extname } from "node:path";
 
 const {
   R2_ACCESS_KEY,
@@ -94,13 +95,20 @@ if (
     }
   }
 
-  const files = changedFiles.map(
-    ({ path }) =>
-      `${CLOUDFLARE_CDN_ORIGIN}/${path.replace(
-        githubPath,
-        pathMap[GITHUB_REPO]
-      )}`
-  );
+  // purge: shrine detail page
+  const files: string[] = [];
+  for (const { status, path } of changedFiles) {
+    const url = `${CLOUDFLARE_CDN_ORIGIN}/${path.replace(
+      githubPath,
+      pathMap[GITHUB_REPO]
+    )}`;
+    files.push(url);
+    if (GITHUB_REPO === "migiwa-ya/dataset-shrines") {
+      const name = basename(path);
+      const slug = name.replace(extname(name), "");
+      files.push(`https://jinmyocho.com/s/${slug}`);
+    }
+  }
 
   if (files.length !== 0) {
     console.log(`[upload-source] PURGE ${files}`);
