@@ -7,7 +7,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "rebuild-index": "npx tsx scripts/rebuild-index.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.826.0",

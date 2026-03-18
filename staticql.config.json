@@ -1,0 +1,198 @@
+{
+  "sources": {
+    "shrines": {
+      "pattern": "content/shrines/*.md",
+      "type": "markdown",
+      "schema": {
+        "type": "object",
+        "required": ["ID", "名称", "都道府県", "区域", "緯度", "経度"],
+        "properties": {
+          "ID": {
+            "type": ["string", "number"]
+          },
+          "総称": {
+            "type": ["string", "null"]
+          },
+          "名称": {
+            "type": "string"
+          },
+          "名称読み": {
+            "type": ["string", "null"]
+          },
+          "別名": {
+            "type": ["string", "null"]
+          },
+          "都道府県": {
+            "type": "string"
+          },
+          "区域": {
+            "type": "string"
+          },
+          "緯度": {
+            "type": "number"
+          },
+          "経度": {
+            "type": "number"
+          },
+          "郵便番号": {
+            "type": ["number", "null"]
+          },
+          "住所": {
+            "type": "string"
+          },
+          "アクセス": {
+            "type": "string"
+          },
+          "電話番号": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "番号": {
+                  "type": "string"
+                },
+                "説明": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "祭神": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["ID", "名称"],
+              "properties": {
+                "ID": {
+                  "type": ["string", "number"]
+                },
+                "名称": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "祭事": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["名称"],
+              "properties": {
+                "名称": {
+                  "type": ["string", "number", "null"]
+                },
+                "日付区分": {
+                  "type": "string"
+                },
+                "開催月日": {
+                  "type": ["string", "null"]
+                },
+                "開催月": {
+                  "type": "number"
+                },
+                "開催月第何週": {
+                  "type": "number"
+                },
+                "開催月何曜日": {
+                  "type": "string"
+                },
+                "開始オフセット": {
+                  "type": "number"
+                },
+                "終了オフセット": {
+                  "type": "number"
+                },
+                "旧暦": {
+                  "type": "boolean"
+                },
+                "備考": {
+                  "type": ["string", "number", "null"]
+                }
+              }
+            }
+          },
+          "画像": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "index": {
+        "slug": {}
+      },
+      "customIndex": {
+        "nameBigram": {},
+        "geohash": {
+          "indexDepth": 2
+        },
+        "festivalDate": {
+          "indexDepth": 2
+        }
+      }
+    },
+    "cities": {
+      "pattern": "content/cities/*.json",
+      "type": "json",
+      "schema": {
+        "type": "object",
+        "required": ["都道府県", "市区町村", "緯度", "経度", "geohash"],
+        "properties": {
+          "都道府県": {
+            "type": "string"
+          },
+          "郡": {
+            "type": ["string", "null"]
+          },
+          "市区町村": {
+            "type": "string"
+          },
+          "緯度": {
+            "type": ["number"]
+          },
+          "経度": {
+            "type": ["number"]
+          },
+          "geohash": {
+            "type": ["string"]
+          }
+        }
+      },
+      "index": {
+        "slug": {}
+      },
+      "customIndex": {
+        "addressBigram": {}
+      }
+    },
+    "deities": {
+      "pattern": "content/deities/*.md",
+      "type": "markdown",
+      "schema": {
+        "type": "object",
+        "required": ["ID", "名称"],
+        "properties": {
+          "ID": {
+            "type": ["string", "number"]
+          },
+          "名称": {
+            "type": "string"
+          },
+          "名称読み": {
+            "type": "string"
+          }
+        }
+      },
+      "relations": {
+        "shrines": {
+          "to": "shrines",
+          "localKey": "slug",
+          "foreignKey": "祭神.ID",
+          "type": "hasMany"
+        }
+      },
+      "index": {
+        "slug": {}
+      }
+    }
+  }
+}
