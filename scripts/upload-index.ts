@@ -4,11 +4,12 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { readFileSync, existsSync } from "node:fs";
-import { defineStaticQL, StaticQLConfig } from "staticql";
+import { defineStaticQL, StaticQLConfig, InMemoryCacheProvider } from "staticql";
 import { extractDiff } from "staticql/diff";
 import { GitHubDiffProvider } from "staticql/diff/github";
 import { FetchRepository } from "staticql/repo/fetch";
 import { FsRepository } from "staticql/repo/fs";
+import { CachedRepository } from "staticql/repo/cached";
 
 const {
   R2_ACCESS_KEY,
@@ -75,7 +76,10 @@ if (
   });
 
   const staticql = defineStaticQL(config)({
-    repository: new FetchRepository(CLOUDFLARE_CDN_ORIGIN),
+    repository: new CachedRepository(
+      new FetchRepository(CLOUDFLARE_CDN_ORIGIN),
+      new InMemoryCacheProvider()
+    ),
     writeRepository: new FsRepository("./"),
   });
 
