@@ -22,10 +22,13 @@ import {
   mkdirSync,
   cpSync,
   readdirSync,
-  statSync,
+  createReadStream,
+  createWriteStream,
 } from "node:fs";
 import { resolve, relative, join } from "node:path";
 import { execSync } from "node:child_process";
+import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 import { defineStaticQL, StaticQLConfig } from "staticql";
 import { FsRepository } from "staticql/repo/fs";
 
@@ -128,6 +131,23 @@ const DATA_REPOS: Record<string, { repo: string; contentDir: string }> = {
   });
   console.log("[rebuild-index] Index generation completed.");
 
+  // --- 2.5. Generate gzip files ---
+  console.log("[rebuild-index] Generating gzip files...");
+  const indexDir = resolve(outputDir, "index");
+  const jsonlFiles = walkDir(indexDir).filter(
+    (f) => f.endsWith(".jsonl") && !f.endsWith(".gz")
+  );
+  await Promise.all(
+    jsonlFiles.map(async (filePath) => {
+      await pipeline(
+        createReadStream(filePath),
+        createGzip(),
+        createWriteStream(filePath + ".gz")
+      );
+    })
+  );
+  console.log(`[rebuild-index] Generated ${jsonlFiles.length} gzip files.`);
+
   // --- 3. Delete old indexes on R2 (batch delete, up to 1000 per request) ---
   console.log("[rebuild-index] Deleting old indexes on R2...");
   let continuationToken: string | undefined;
@@ -160,7 +180,6 @@ const DATA_REPOS: Record<string, { repo: string; contentDir: string }> = {
 
   // --- 4. Upload new indexes (parallel, 20 at a time) ---
   console.log("[rebuild-index] Uploading new indexes...");
-  const indexDir = resolve(outputDir, "index");
   const files = walkDir(indexDir);
   const CONCURRENCY = 20;
   for (let i = 0; i < files.length; i += CONCURRENCY) {
