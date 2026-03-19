@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.826.0",
-    "staticql": "^0.13.1"
+    "staticql": "^0.13.2"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
