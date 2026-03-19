@@ -1,12 +1,12 @@
 /**
  * Full index rebuild script.
  *
- * Reads data from CDN, generates all indexes locally with the updated config,
+ * Clones dataset repositories, generates all indexes locally,
  * and uploads both the config and index files to R2.
  *
  * Usage:
  *   R2_ACCESS_KEY=... R2_SECRET_KEY=... R2_ENDPOINT=... R2_BUCKET=... \
- *   CLOUDFLARE_CDN_ORIGIN=... CLOUDFLARE_ZONE_ID=... CLOUDFLARE_API_TOKEN=... \
+ *   CLOUDFLARE_ZONE_ID=... CLOUDFLARE_CDN_ORIGIN=... CLOUDFLARE_API_TOKEN=... \
  *   npx tsx scripts/rebuild-index.ts
  */
 import {
@@ -15,20 +15,27 @@ import {
   DeleteObjectCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
-import { readFileSync, existsSync, rmSync } from "node:fs";
-import { resolve, relative } from "node:path";
-import { defineStaticQL, StaticQLConfig, InMemoryCacheProvider } from "staticql";
-import { FetchRepository } from "staticql/repo/fetch";
+import {
+  readFileSync,
+  existsSync,
+  rmSync,
+  mkdirSync,
+  cpSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
+import { resolve, relative, join } from "node:path";
+import { execSync } from "node:child_process";
+import { defineStaticQL, StaticQLConfig } from "staticql";
 import { FsRepository } from "staticql/repo/fs";
-import { CachedRepository } from "staticql/repo/cached";
 
 const {
   R2_ACCESS_KEY,
   R2_SECRET_KEY,
   R2_ENDPOINT,
   R2_BUCKET,
-  CLOUDFLARE_CDN_ORIGIN,
   CLOUDFLARE_ZONE_ID,
+  CLOUDFLARE_CDN_ORIGIN,
   CLOUDFLARE_API_TOKEN,
 } = process.env;
 
@@ -37,16 +44,21 @@ if (
   !R2_SECRET_KEY ||
   !R2_ENDPOINT ||
   !R2_BUCKET ||
-  !CLOUDFLARE_CDN_ORIGIN ||
   !CLOUDFLARE_ZONE_ID ||
+  !CLOUDFLARE_CDN_ORIGIN ||
   !CLOUDFLARE_API_TOKEN
 ) {
   console.error("[rebuild-index] env missing");
   process.exit(1);
 }
 
+const DATA_REPOS: Record<string, { repo: string; contentDir: string }> = {
+  shrines: { repo: "migiwa-ya/dataset-shrines", contentDir: "content/shrines" },
+  deities: { repo: "migiwa-ya/dataset-deities", contentDir: "content/deities" },
+  cities: { repo: "migiwa-ya/dataset-cities", contentDir: "content/cities" },
+};
+
 (async () => {
-  // Load config from local file (with updated indexDepth)
   const config: StaticQLConfig = JSON.parse(
     readFileSync(resolve("staticql.config.json"), "utf-8")
   );
@@ -57,18 +69,34 @@ if (
     credentials: { accessKeyId: R2_ACCESS_KEY, secretAccessKey: R2_SECRET_KEY },
   });
 
-  // Clean local index output
+  // --- 1. Clone repos and assemble local content directory ---
+  const workDir = resolve("./work");
+  if (existsSync(workDir)) rmSync(workDir, { recursive: true, force: true });
+  mkdirSync(workDir, { recursive: true });
+
+  for (const [source, { repo, contentDir }] of Object.entries(DATA_REPOS)) {
+    console.log(`[rebuild-index] Cloning ${repo}...`);
+    const cloneDir = resolve(workDir, `repo-${source}`);
+    execSync(`git clone --depth 1 https://github.com/${repo}.git ${cloneDir}`, {
+      stdio: "pipe",
+    });
+
+    // Copy sources/ → work/content/{source}/
+    const srcDir = join(cloneDir, "sources");
+    const destDir = resolve(workDir, contentDir);
+    mkdirSync(destDir, { recursive: true });
+    cpSync(srcDir, destDir, { recursive: true });
+    console.log(`[rebuild-index] ${source}: copied to ${contentDir}`);
+  }
+
+  // --- 2. Generate indexes locally ---
   const outputDir = resolve("./output");
   if (existsSync(resolve(outputDir, "index"))) {
     rmSync(resolve(outputDir, "index"), { recursive: true, force: true });
   }
 
-  // Read data from CDN, write indexes locally
   const staticql = defineStaticQL(config)({
-    defaultRepository: new CachedRepository(
-      new FetchRepository(CLOUDFLARE_CDN_ORIGIN),
-      new InMemoryCacheProvider()
-    ),
+    defaultRepository: new FsRepository(workDir),
     writeRepository: new FsRepository(outputDir),
   });
 
@@ -100,7 +128,7 @@ if (
   });
   console.log("[rebuild-index] Index generation completed.");
 
-  // Delete old indexes on R2
+  // --- 3. Delete old indexes on R2 ---
   console.log("[rebuild-index] Deleting old indexes on R2...");
   let continuationToken: string | undefined;
   do {
@@ -121,7 +149,7 @@ if (
     continuationToken = list.NextContinuationToken;
   } while (continuationToken);
 
-  // Upload new indexes
+  // --- 4. Upload new indexes ---
   console.log("[rebuild-index] Uploading new indexes...");
   const indexDir = resolve(outputDir, "index");
   const files = walkDir(indexDir);
@@ -134,7 +162,7 @@ if (
     console.log("[rebuild-index] PUT", key);
   }
 
-  // Upload updated config
+  // --- 5. Upload updated config ---
   const configBody = readFileSync(resolve("staticql.config.json"));
   await client.send(
     new PutObjectCommand({
@@ -146,7 +174,7 @@ if (
   );
   console.log("[rebuild-index] PUT staticql.config.json");
 
-  // Purge CDN cache for indexes and config
+  // --- 6. Purge CDN cache ---
   console.log("[rebuild-index] Purging CDN cache...");
   await fetch(
     `https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache`,
@@ -162,12 +190,13 @@ if (
     .then((r) => r.json())
     .then(console.log);
 
+  // --- 7. Cleanup ---
+  rmSync(workDir, { recursive: true, force: true });
+
   console.log("[rebuild-index] Done.");
 })();
 
 function walkDir(dir: string): string[] {
-  const { readdirSync, statSync } = require("node:fs");
-  const { join } = require("node:path");
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
@@ -180,7 +209,7 @@ function walkDir(dir: string): string[] {
   return files;
 }
 
-// --- Shared utilities (copied from upload-index.ts) ---
+// --- Shared utilities ---
 
 function ngram(str: string, n: number): string[] {
   if (n <= 0) return [];
@@ -207,15 +236,6 @@ function weekdayStrToNumber(weekday: string): number {
     日: 0, 月: 1, 火: 2, 水: 3, 木: 4, 金: 5, 土: 6,
   };
   return map[weekday] ?? 0;
-}
-
-function getStartOfWeek(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
 }
 
 function addDays(date: Date, days: number): Date {
