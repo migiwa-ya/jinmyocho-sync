@@ -12,7 +12,7 @@
 import {
   S3Client,
   PutObjectCommand,
-  DeleteObjectCommand,
+  DeleteObjectsCommand,
   ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import {
@@ -128,9 +128,10 @@ const DATA_REPOS: Record<string, { repo: string; contentDir: string }> = {
   });
   console.log("[rebuild-index] Index generation completed.");
 
-  // --- 3. Delete old indexes on R2 ---
+  // --- 3. Delete old indexes on R2 (batch delete, up to 1000 per request) ---
   console.log("[rebuild-index] Deleting old indexes on R2...");
   let continuationToken: string | undefined;
+  let deleteCount = 0;
   do {
     const list = await client.send(
       new ListObjectsV2Command({
@@ -139,27 +140,41 @@ const DATA_REPOS: Record<string, { repo: string; contentDir: string }> = {
         ContinuationToken: continuationToken,
       })
     );
-    for (const obj of list.Contents ?? []) {
-      if (obj.Key) {
-        await client.send(
-          new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: obj.Key })
-        );
-      }
+    const keys = (list.Contents ?? [])
+      .map((obj) => obj.Key)
+      .filter((k): k is string => !!k);
+
+    if (keys.length > 0) {
+      await client.send(
+        new DeleteObjectsCommand({
+          Bucket: R2_BUCKET,
+          Delete: { Objects: keys.map((Key) => ({ Key })) },
+        })
+      );
+      deleteCount += keys.length;
+      console.log(`[rebuild-index] Deleted ${deleteCount} objects...`);
     }
     continuationToken = list.NextContinuationToken;
   } while (continuationToken);
+  console.log(`[rebuild-index] Deleted ${deleteCount} objects total.`);
 
-  // --- 4. Upload new indexes ---
+  // --- 4. Upload new indexes (parallel, 20 at a time) ---
   console.log("[rebuild-index] Uploading new indexes...");
   const indexDir = resolve(outputDir, "index");
   const files = walkDir(indexDir);
-  for (const filePath of files) {
-    const key = "index/" + relative(indexDir, filePath);
-    const body = readFileSync(filePath);
-    await client.send(
-      new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: body })
+  const CONCURRENCY = 20;
+  for (let i = 0; i < files.length; i += CONCURRENCY) {
+    const batch = files.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map(async (filePath) => {
+        const key = "index/" + relative(indexDir, filePath);
+        const body = readFileSync(filePath);
+        await client.send(
+          new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: body })
+        );
+      })
     );
-    console.log("[rebuild-index] PUT", key);
+    console.log(`[rebuild-index] Uploaded ${Math.min(i + CONCURRENCY, files.length)}/${files.length}`);
   }
 
   // --- 5. Upload updated config ---
